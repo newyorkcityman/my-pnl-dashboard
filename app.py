@@ -5,6 +5,31 @@ import sqlite3
 from datetime import datetime, timedelta
 import plotly.graph_objects as go
 
+# =====================================================================
+# 🌟 [사용자 설정] 나의 투자 원금, 현물 평단가, 과거 수익금 입력 🌟
+# =====================================================================
+
+# 1. 올해 처음 투입한 총 원금 (USDT 기준)
+INITIAL_INVESTMENT = 2100.0 
+
+# 2. 보유 중인 현물(Spot) 코인 평단가
+SPOT_AVG_PRICES = {
+    "RSNDK": 1656.68, 
+    "BTC": 65000.0,
+}
+
+# 3. 과거 기간별 누적 수익금(PnL) 직접 입력
+# 해당 기간 동안 '얼마를 벌었는지(또는 잃었는지)' 달러(USD) 기준으로 적어주세요.
+# (Today's PnL은 내일부터 시스템이 매일 자동으로 계산합니다!)
+HISTORICAL_PNL = {
+    7: -8.18,     # 7일간 누적 수익
+    30: 272.17,    # 30일간 누적 수익
+    90: 1165.00,    # 90일간 누적 수익 (본인 수치로 변경)
+    180: 1245.43,  # 180일간 누적 수익 (본인 수치로 변경)
+    365: 1837.29.   # 1년(365일) 누적 수익 (본인 수치로 변경)
+}
+# =====================================================================
+
 # --- 1. 페이지 설정 ---
 st.set_page_config(page_title="Dashboard", layout="wide")
 
@@ -13,22 +38,17 @@ st.markdown("""
     <style>
     .stApp { background-color: #0b0e11; color: #eaeaec; }
     header { visibility: hidden; }
-    /* 새로 추가된 Est. Total Value 스타일 */
     .est-title { font-size: 24px; font-weight: 600; color: #eaeaec; margin-bottom: 5px; margin-top: 10px; }
     .big-asset { font-size: 42px !important; font-weight: 800; margin-bottom: 0px; line-height: 1.2; }
     .sub-asset { font-size: 16px; color: #848e9c; margin-top: 0px; margin-bottom: 30px; }
+    .ytd-title { font-size: 14px; color: #848e9c; margin-bottom: 5px; }
     .pnl-title { font-size: 13px; color: #848e9c; border-bottom: 1px dashed #5e6673; display: inline-block; margin-bottom: 5px; }
     .pnl-val-red { font-size: 20px; font-weight: bold; color: #f6465d; }
     .pnl-val-green { font-size: 20px; font-weight: bold; color: #0ecb81; }
     .pnl-val-neutral { font-size: 20px; font-weight: bold; color: #eaeaec; }
     div.row-widget.stRadio > div { flex-direction: row; align-items: center; }
-    
     [data-testid="stStatusWidget"] { display: none !important; }
-    .stApp [data-testid="stAppViewBlockContainer"] {
-        opacity: 1 !important;
-        filter: none !important;
-        transition: none !important;
-    }
+    .stApp [data-testid="stAppViewBlockContainer"] { opacity: 1 !important; filter: none !important; transition: none !important; }
     </style>
 """, unsafe_allow_html=True)
 
@@ -45,13 +65,6 @@ def save_today_asset(conn, total_asset):
     c = conn.cursor()
     c.execute("REPLACE INTO daily_assets (date, total_asset) VALUES (?, ?)", (today_str, total_asset))
     conn.commit()
-
-def get_past_asset(conn, days_ago):
-    target_date = (datetime.now() - timedelta(days=days_ago)).strftime('%Y-%m-%d')
-    c = conn.cursor()
-    c.execute("SELECT total_asset FROM daily_assets WHERE date <= ? ORDER BY date DESC LIMIT 1", (target_date,))
-    result = c.fetchone()
-    return result[0] if result else None
 
 def format_pnl(val):
     if val > 0: return f"<div class='pnl-val-green'>+{val:,.2f} USD</div>"
@@ -99,18 +112,56 @@ try:
 
     current_total_asset = total_usdt_value
     conn = init_db()
+    
+    # 💡 오늘 자산 자동 저장 (내일부터 Today's PnL 계산의 기준이 됩니다)
     save_today_asset(conn, current_total_asset)
 
-    asset_1d = get_past_asset(conn, 1) or current_total_asset
-    asset_7d = get_past_asset(conn, 7) or current_total_asset
-    asset_30d = get_past_asset(conn, 30) or current_total_asset
+    df_db = pd.read_sql_query("SELECT date, total_asset FROM daily_assets ORDER BY date ASC", conn)
+    virtual_records = []
+    today_dt = datetime.now()
+    
+    for days_ago, pnl in HISTORICAL_PNL.items():
+        past_date = (today_dt - timedelta(days=days_ago)).strftime('%Y-%m-%d')
+        if past_date not in df_db['date'].values:
+            virtual_records.append({'date': past_date, 'total_asset': current_total_asset - pnl})
+            
+    if virtual_records:
+        df_virtual = pd.DataFrame(virtual_records)
+        df = pd.concat([df_virtual, df_db]).sort_values(by='date').reset_index(drop=True)
+    else:
+        df = df_db.copy()
+        
+    df['date_obj'] = pd.to_datetime(df['date']).dt.date
+    today_date = today_dt.date()
+
+    def get_past_asset_from_df(days_ago):
+        target_date = today_date - timedelta(days=days_ago)
+        past_df = df[df['date_obj'] <= target_date]
+        if not past_df.empty:
+            return past_df.iloc[-1]['total_asset']
+        return current_total_asset
+
+    asset_1d = get_past_asset_from_df(1)
+    asset_7d = get_past_asset_from_df(7)
+    asset_30d = get_past_asset_from_df(30)
+    asset_90d = get_past_asset_from_df(90)
+    asset_180d = get_past_asset_from_df(180)
+    asset_1y = get_past_asset_from_df(365)
 
     # --- 6. 상단 화면 ---
     st.markdown("<div class='est-title'>Est. Total Value</div>", unsafe_allow_html=True)
     st.markdown(f"<div class='big-asset'>{current_total_asset:,.2f} USDT</div>", unsafe_allow_html=True)
     st.markdown(f"<div class='sub-asset'>≈ {current_total_asset:,.2f} USD</div>", unsafe_allow_html=True)
     
-    col1, col2, col3 = st.columns(3)
+    ytd_pnl = current_total_asset - INITIAL_INVESTMENT
+    ytd_perc = (ytd_pnl / INITIAL_INVESTMENT) * 100 if INITIAL_INVESTMENT > 0 else 0
+    ytd_color = "#0ecb81" if ytd_pnl >= 0 else "#f6465d"
+    ytd_sign = "+" if ytd_pnl > 0 else ""
+    
+    st.markdown("<div class='ytd-title'>YTD PnL (올해 누적 수익)</div>", unsafe_allow_html=True)
+    st.markdown(f"<div style='font-size:24px; font-weight:bold; color:{ytd_color}; margin-bottom: 30px;'>{ytd_sign}{ytd_pnl:,.2f} USD ({ytd_sign}{ytd_perc:,.2f}%)</div>", unsafe_allow_html=True)
+    
+    col1, col2, col3, col4, col5, col6 = st.columns(6)
     with col1:
         st.markdown("<div class='pnl-title'>Today's PnL</div>", unsafe_allow_html=True)
         st.markdown(format_pnl(current_total_asset - asset_1d), unsafe_allow_html=True)
@@ -120,6 +171,15 @@ try:
     with col3:
         st.markdown("<div class='pnl-title'>30D PnL</div>", unsafe_allow_html=True)
         st.markdown(format_pnl(current_total_asset - asset_30d), unsafe_allow_html=True)
+    with col4:
+        st.markdown("<div class='pnl-title'>90D PnL</div>", unsafe_allow_html=True)
+        st.markdown(format_pnl(current_total_asset - asset_90d), unsafe_allow_html=True)
+    with col5:
+        st.markdown("<div class='pnl-title'>180D PnL</div>", unsafe_allow_html=True)
+        st.markdown(format_pnl(current_total_asset - asset_180d), unsafe_allow_html=True)
+    with col6:
+        st.markdown("<div class='pnl-title'>1Y PnL</div>", unsafe_allow_html=True)
+        st.markdown(format_pnl(current_total_asset - asset_1y), unsafe_allow_html=True)
         
     st.write("")
     st.divider()
@@ -127,25 +187,22 @@ try:
     # --- 7. 기간 설정 버튼 및 차트 ---
     col_period, col_date, col_dummy = st.columns([4, 3, 3])
     with col_period:
-        period = st.radio("기간 선택", ["7D", "30D", "90D", "180D", "Custom"], horizontal=True, label_visibility="collapsed")
+        period = st.radio("기간 선택", ["7D", "30D", "90D", "180D", "1Y", "Custom"], horizontal=True, label_visibility="collapsed")
     with col_date:
         if period == "Custom": date_range = st.date_input("날짜 지정", [datetime.now().date() - timedelta(days=7), datetime.now().date()], label_visibility="collapsed")
         else: date_range = None
 
-    df = pd.read_sql_query("SELECT date, total_asset FROM daily_assets ORDER BY date ASC", conn)
-    df['date_obj'] = pd.to_datetime(df['date']).dt.date
-    today = datetime.now().date()
-
-    if period == "7D": start_date = today - timedelta(days=7)
-    elif period == "30D": start_date = today - timedelta(days=30)
-    elif period == "90D": start_date = today - timedelta(days=90)
-    elif period == "180D": start_date = today - timedelta(days=180)
+    if period == "7D": start_date = today_date - timedelta(days=7)
+    elif period == "30D": start_date = today_date - timedelta(days=30)
+    elif period == "90D": start_date = today_date - timedelta(days=90)
+    elif period == "180D": start_date = today_date - timedelta(days=180)
+    elif period == "1Y": start_date = today_date - timedelta(days=365)
     elif period == "Custom" and date_range and len(date_range) == 2:
         start_date = date_range[0]
-        today = date_range[1]
-    else: start_date = today - timedelta(days=7)
+        today_date = date_range[1]
+    else: start_date = today_date - timedelta(days=7)
         
-    mask = (df['date_obj'] >= start_date) & (df['date_obj'] <= today)
+    mask = (df['date_obj'] >= start_date) & (df['date_obj'] <= today_date)
     filtered_df = df.loc[mask].copy()
 
     if not filtered_df.empty:
@@ -182,13 +239,6 @@ try:
 
     # --- 8. 세부 포지션 현황 표 ---
     
-    # 🌟 [매우 중요] 본인이 매수한 현물 코인의 평단가 입력 🌟
-    spot_avg_prices = {
-        "RSNDK": 1634.89, 
-        "BTC": 65000.0,
-    }
-
-    # 8-1. Futures (선물) 표
     futures_html_parts = []
     futures_header = """
     <div style='font-size: 15px; color: #848e9c; margin-top: 40px; margin-bottom: 10px; font-weight: 600;'>Futures</div>
@@ -230,7 +280,6 @@ try:
     futures_html_parts.append("</tbody></table>")
     st.markdown("".join(futures_html_parts), unsafe_allow_html=True)
 
-    # 8-2. Spot (현물) 표 - '평단가' 열 추가
     spot_html_parts = []
     spot_header = """
     <div style='font-size: 15px; color: #848e9c; margin-top: 40px; margin-bottom: 10px; font-weight: 600;'>Spot</div>
@@ -249,14 +298,12 @@ try:
             
             if value >= 1: 
                 has_spot = True
-                
-                # 평단가 및 PNL 계산
                 if coin == 'USDT':
                     avg_price_html = "<td style='padding: 15px 5px; color:#5e6673;'>$1.00</td>"
                     pnl_html = "<td style='padding: 15px 5px; color:#5e6673; font-size: 12px;'>-</td>"
                     perc_html = "<td style='padding: 15px 5px; color:#5e6673; font-size: 12px;'>-</td>"
-                elif coin in spot_avg_prices:
-                    avg_price = spot_avg_prices[coin]
+                elif coin in SPOT_AVG_PRICES:
+                    avg_price = SPOT_AVG_PRICES[coin]
                     unrealized_pnl = (current_price - avg_price) * amount
                     pnl_perc = ((current_price - avg_price) / avg_price) * 100
                     pnl_color = "#0ecb81" if unrealized_pnl >= 0 else "#f6465d"
