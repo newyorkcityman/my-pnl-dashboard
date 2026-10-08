@@ -8,7 +8,7 @@ import plotly.graph_objects as go
 # --- 1. 페이지 설정 ---
 st.set_page_config(page_title="Dashboard", layout="wide")
 
-# --- 2. 커스텀 CSS ---
+# --- 2. 커스텀 CSS (화면 어두워짐 및 로딩 애니메이션 방지 추가) ---
 st.markdown("""
     <style>
     .stApp { background-color: #0b0e11; color: #eaeaec; }
@@ -20,9 +20,20 @@ st.markdown("""
     .pnl-val-green { font-size: 20px; font-weight: bold; color: #0ecb81; }
     .pnl-val-neutral { font-size: 20px; font-weight: bold; color: #eaeaec; }
     div.row-widget.stRadio > div { flex-direction: row; align-items: center; }
+    
+    /* 우측 상단 Running(로딩 중) 애니메이션 숨기기 */
+    [data-testid="stStatusWidget"] { display: none !important; }
+    
+    /* 로딩 중 화면 흐려짐(어두워짐) 완벽 방지 */
+    .stApp [data-testid="stAppViewBlockContainer"] {
+        opacity: 1 !important;
+        filter: none !important;
+        transition: none !important;
+    }
     </style>
 """, unsafe_allow_html=True)
 
+# --- 3. 데이터베이스 함수 ---
 def init_db():
     conn = sqlite3.connect('my_pnl_ledger.db')
     c = conn.cursor()
@@ -48,20 +59,28 @@ def format_pnl(val):
     elif val < 0: return f"<div class='pnl-val-red'>{val:,.2f} USD</div>"
     else: return f"<div class='pnl-val-neutral'>{val:,.2f} USD</div>"
 
-# --- 4. 메인 로직 ---
-try:
-    api_key = st.secrets["BITGET_API_KEY"]
-    secret_key = st.secrets["BITGET_SECRET_KEY"]
-    passphrase = st.secrets["BITGET_PASSPHRASE"]
-    
+# --- 4. API 데이터 초고속 캐싱 (30초 동안 데이터 기억) ---
+@st.cache_data(ttl=30, show_spinner=False)
+def get_exchange_data(api_key, secret_key, passphrase):
     exchange_spot = ccxt.bitget({'apiKey': api_key, 'secret': secret_key, 'password': passphrase, 'enableRateLimit': True})
     exchange_swap = ccxt.bitget({'apiKey': api_key, 'secret': secret_key, 'password': passphrase, 'enableRateLimit': True, 'options': {'defaultType': 'swap'}})
 
     spot_balance = exchange_spot.fetch_balance()
     swap_balance = exchange_swap.fetch_balance()
-    
     try: tickers = exchange_spot.fetch_tickers()
     except: tickers = {}
+    positions = exchange_swap.fetch_positions()
+    
+    return spot_balance, swap_balance, tickers, positions
+
+# --- 5. 메인 로직 ---
+try:
+    api_key = st.secrets["BITGET_API_KEY"]
+    secret_key = st.secrets["BITGET_SECRET_KEY"]
+    passphrase = st.secrets["BITGET_PASSPHRASE"]
+    
+    # 캐싱된 함수로 데이터를 한 번에 가져옴 (버튼 누를 때마다 거래소 접속 안 함)
+    spot_balance, swap_balance, tickers, positions = get_exchange_data(api_key, secret_key, passphrase)
 
     total_usdt_value = 0
     for coin, amount in spot_balance['total'].items():
@@ -88,7 +107,7 @@ try:
     asset_7d = get_past_asset(conn, 7) or current_total_asset
     asset_30d = get_past_asset(conn, 30) or current_total_asset
 
-    # --- 5. 상단 화면 ---
+    # --- 6. 상단 화면 ---
     st.markdown(f"<div class='big-asset'>{current_total_asset:,.2f} USDT</div>", unsafe_allow_html=True)
     st.markdown(f"<div class='sub-asset'>≈ {current_total_asset:,.2f} USD</div>", unsafe_allow_html=True)
     
@@ -106,7 +125,7 @@ try:
     st.write("")
     st.divider()
 
-    # --- 6. 기간 설정 버튼 및 차트 ---
+    # --- 7. 기간 설정 버튼 및 차트 ---
     col_period, col_date, col_dummy = st.columns([4, 3, 3])
     with col_period:
         period = st.radio("기간 선택", ["7D", "30D", "90D", "180D", "Custom"], horizontal=True, label_visibility="collapsed")
@@ -130,7 +149,6 @@ try:
     mask = (df['date_obj'] >= start_date) & (df['date_obj'] <= today)
     filtered_df = df.loc[mask].copy()
 
-    # 차트 상단 PNL 표시
     if not filtered_df.empty:
         period_pnl = filtered_df['total_asset'].iloc[-1] - filtered_df['total_asset'].iloc[0]
         pnl_color = "#0ecb81" if period_pnl >= 0 else "#f6465d"
@@ -139,45 +157,17 @@ try:
 
     tab1, tab2 = st.tabs(["Total PnL", "Daily PnL"])
     
-    # 💡 [핵심 변경] 차트 레이아웃(X축 날짜 포맷 및 범례)을 사진과 동일하게 수정
     chart_layout = dict(
-        plot_bgcolor='rgba(0,0,0,0)', 
-        paper_bgcolor='rgba(0,0,0,0)', 
-        font=dict(color='#848e9c'), 
-        margin=dict(l=0, r=0, t=10, b=10), 
-        xaxis=dict(
-            showgrid=False, 
-            zeroline=False, 
-            tickformat="%Y-%m-%d", # X축 텍스트에서 시/분/초 제거[cite: 11]
-            hoverformat="%Y-%m-%d" # 마우스 오버 시에도 시/분/초 제거
-        ), 
-        yaxis=dict(
-            showgrid=True, 
-            gridcolor='#2b3139', 
-            zeroline=False, 
-            tickprefix="$"
-        ),
-        legend=dict(
-            orientation="h", 
-            yanchor="top", 
-            y=-0.1, 
-            xanchor="center", 
-            x=0.5
-        ) # 하단 중앙 범례 추가[cite: 11]
+        plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)', font=dict(color='#848e9c'), margin=dict(l=0, r=0, t=10, b=10), 
+        xaxis=dict(showgrid=False, zeroline=False, tickformat="%Y-%m-%d", hoverformat="%Y-%m-%d"), 
+        yaxis=dict(showgrid=True, gridcolor='#2b3139', zeroline=False, tickprefix="$"),
+        legend=dict(orientation="h", yanchor="top", y=-0.1, xanchor="center", x=0.5)
     )
 
     with tab1:
         fig_total = go.Figure()
         if not filtered_df.empty: 
-            fig_total.add_trace(go.Scatter(
-                x=filtered_df['date'], 
-                y=filtered_df['total_asset'], 
-                mode='lines', 
-                line=dict(color='#00d1c1', width=3), 
-                fill='tozeroy', 
-                fillcolor='rgba(0, 209, 193, 0.1)',
-                name='Total PnL' # 범례 이름 설정[cite: 11]
-            ))
+            fig_total.add_trace(go.Scatter(x=filtered_df['date'], y=filtered_df['total_asset'], mode='lines', line=dict(color='#00d1c1', width=3), fill='tozeroy', fillcolor='rgba(0, 209, 193, 0.1)', name='Total PnL'))
         fig_total.update_layout(**chart_layout)
         st.plotly_chart(fig_total, use_container_width=True)
 
@@ -186,22 +176,17 @@ try:
             filtered_df['Daily_PnL'] = filtered_df['total_asset'].diff().fillna(0)
             colors = ['#0ecb81' if val >= 0 else '#f6465d' for val in filtered_df['Daily_PnL']]
             fig_daily = go.Figure()
-            fig_daily.add_trace(go.Bar(
-                x=filtered_df['date'], 
-                y=filtered_df['Daily_PnL'], 
-                marker_color=colors,
-                name='Daily PnL'
-            ))
+            fig_daily.add_trace(go.Bar(x=filtered_df['date'], y=filtered_df['Daily_PnL'], marker_color=colors, name='Daily PnL'))
             fig_daily.update_layout(**chart_layout)
             fig_daily.add_hline(y=0, line_color="#5e6673", line_width=1)
             st.plotly_chart(fig_daily, use_container_width=True)
 
-    # --- 7. 세부 포지션 현황 표 ---
+    # --- 8. 세부 포지션 현황 표 ---
     st.markdown("<h3 style='color: #eaeaec; margin-top: 50px; margin-bottom: 15px; font-size: 20px;'>📋 현재 포지션 및 자산 현황</h3>", unsafe_allow_html=True)
     
-    # 🌟 [매우 중요] 여기에 본인이 매수한 현물 코인의 평단가를 적어주세요! 🌟
+    # 🌟 [매우 중요] 여기에 본인이 매수한 현물 코인의 평단가를 다시 적어주세요! 🌟
     spot_avg_prices = {
-        "RSNDK": 1634.89,  # <-- 예시입니다. 본인의 RSNDK 평단가로 숫자를 바꿔주세요!
+        "RSNDK": 1634.89,  # <-- 본인의 RSNDK 평단가로 숫자를 바꿔주세요!
         "BTC": 65000.0,
     }
 
@@ -214,7 +199,6 @@ try:
     """.replace('\n', '')
     html_parts.append(header_html)
     
-    positions = exchange_swap.fetch_positions()
     for p in positions:
         if p.get('contracts', 0) > 0:
             symbol = p.get('symbol', '').split(':')[0]
