@@ -8,7 +8,7 @@ import plotly.graph_objects as go
 # --- 1. 페이지 설정 ---
 st.set_page_config(page_title="Dashboard", layout="wide")
 
-# --- 2. 커스텀 CSS (화면 어두워짐 및 로딩 애니메이션 방지 추가) ---
+# --- 2. 커스텀 CSS ---
 st.markdown("""
     <style>
     .stApp { background-color: #0b0e11; color: #eaeaec; }
@@ -24,7 +24,7 @@ st.markdown("""
     /* 우측 상단 Running(로딩 중) 애니메이션 숨기기 */
     [data-testid="stStatusWidget"] { display: none !important; }
     
-    /* 로딩 중 화면 흐려짐(어두워짐) 완벽 방지 */
+    /* 로딩 중 화면 흐려짐(어두워짐) 방지 */
     .stApp [data-testid="stAppViewBlockContainer"] {
         opacity: 1 !important;
         filter: none !important;
@@ -59,7 +59,7 @@ def format_pnl(val):
     elif val < 0: return f"<div class='pnl-val-red'>{val:,.2f} USD</div>"
     else: return f"<div class='pnl-val-neutral'>{val:,.2f} USD</div>"
 
-# --- 4. API 데이터 초고속 캐싱 (30초 동안 데이터 기억) ---
+# --- 4. API 데이터 캐싱 ---
 @st.cache_data(ttl=30, show_spinner=False)
 def get_exchange_data(api_key, secret_key, passphrase):
     exchange_spot = ccxt.bitget({'apiKey': api_key, 'secret': secret_key, 'password': passphrase, 'enableRateLimit': True})
@@ -79,7 +79,6 @@ try:
     secret_key = st.secrets["BITGET_SECRET_KEY"]
     passphrase = st.secrets["BITGET_PASSPHRASE"]
     
-    # 캐싱된 함수로 데이터를 한 번에 가져옴 (버튼 누를 때마다 거래소 접속 안 함)
     spot_balance, swap_balance, tickers, positions = get_exchange_data(api_key, secret_key, passphrase)
 
     total_usdt_value = 0
@@ -181,32 +180,34 @@ try:
             fig_daily.add_hline(y=0, line_color="#5e6673", line_width=1)
             st.plotly_chart(fig_daily, use_container_width=True)
 
-    # --- 8. 세부 포지션 현황 표 ---
-    st.markdown("<h3 style='color: #eaeaec; margin-top: 50px; margin-bottom: 15px; font-size: 20px;'>📋 현재 포지션 및 자산 현황</h3>", unsafe_allow_html=True)
+    # --- 8. 세부 포지션 현황 표 (선물/현물 분리 및 불필요한 칸 제거) ---
     
     # 🌟 [매우 중요] 여기에 본인이 매수한 현물 코인의 평단가를 다시 적어주세요! 🌟
     spot_avg_prices = {
-        "RSNDK": 1634.89,  # <-- 본인의 RSNDK 평단가로 숫자를 바꿔주세요!
+        "RSNDK": 1634.89, 
         "BTC": 65000.0,
     }
 
-    html_parts = []
-    header_html = """
+    # 8-1. Futures (선물) 표
+    futures_html_parts = []
+    futures_header = """
+    <div style='font-size: 15px; color: #848e9c; margin-top: 40px; margin-bottom: 10px; font-weight: 600;'>Futures</div>
     <table style='width:100%; border-collapse: collapse; text-align: left; color: #eaeaec; font-size: 14px;'>
     <thead><tr style='border-bottom: 1px solid #2b3139; color: #848e9c; font-size: 13px;'>
-    <th style='padding: 10px 5px;'>마켓</th><th style='padding: 10px 5px;'>종목</th><th style='padding: 10px 5px;'>포지션 (레버리지)</th><th style='padding: 10px 5px;'>투입 금액 (Margin)</th><th style='padding: 10px 5px;'>자산 비중</th><th style='padding: 10px 5px;'>미실현 손익</th><th style='padding: 10px 5px;'>수익률(%)</th>
+    <th style='padding: 10px 5px;'>종목</th><th style='padding: 10px 5px;'>포지션 (레버리지)</th><th style='padding: 10px 5px;'>투입 금액 (Margin)</th><th style='padding: 10px 5px;'>미실현 손익</th><th style='padding: 10px 5px;'>수익률(%)</th>
     </tr></thead><tbody>
     """.replace('\n', '')
-    html_parts.append(header_html)
+    futures_html_parts.append(futures_header)
     
+    has_futures = False
     for p in positions:
         if p.get('contracts', 0) > 0:
+            has_futures = True
             symbol = p.get('symbol', '').split(':')[0]
             side_str = "LONG" if p.get('side') == 'long' else "SHORT"
             side_color = "#0ecb81" if side_str == "LONG" else "#f6465d"
             lev = int(p.get('leverage', 1))
             margin = float(p.get('initialMargin') or (float(p.get('notional', 0)) / lev))
-            weight = (margin / current_total_asset * 100) if current_total_asset > 0 else 0
             pnl = float(p.get('unrealizedPnl', 0))
             pnl_perc = float(p.get('percentage', 0))
             pnl_color = "#0ecb81" if pnl >= 0 else "#f6465d"
@@ -214,24 +215,40 @@ try:
             
             row_html = f"""
             <tr style='border-bottom: 1px solid #2b3139;'>
-            <td style='padding: 15px 5px;'><span style='background-color:rgba(0, 209, 193, 0.2); color:#00d1c1; padding:3px 8px; border-radius:4px; font-size:12px; font-weight:bold;'>Futures</span></td>
             <td style='padding: 15px 5px; font-weight:bold;'>{symbol}</td>
             <td style='padding: 15px 5px; color:{side_color}; font-weight:bold;'>{side_str} <span style='background-color:#2b3139; color:#848e9c; padding:2px 6px; border-radius:4px; font-size:12px; margin-left:6px;'>x{lev}</span></td>
-            <td style='padding: 15px 5px;'>${margin:,.2f}</td><td style='padding: 15px 5px;'>{weight:,.1f}%</td>
+            <td style='padding: 15px 5px;'>${margin:,.2f}</td>
             <td style='padding: 15px 5px; color:{pnl_color}; font-weight:bold;'>{pnl_sign}${pnl:,.2f}</td>
             <td style='padding: 15px 5px; color:{pnl_color}; font-weight:bold;'>{pnl_sign}{pnl_perc:,.2f}%</td>
             </tr>
             """.replace('\n', '')
-            html_parts.append(row_html)
+            futures_html_parts.append(row_html)
 
+    if not has_futures:
+        futures_html_parts.append("<tr><td colspan='5' style='padding: 15px 5px; color:#5e6673; text-align:center;'>현재 진입한 선물 포지션이 없습니다.</td></tr>")
+        
+    futures_html_parts.append("</tbody></table>")
+    st.markdown("".join(futures_html_parts), unsafe_allow_html=True)
+
+    # 8-2. Spot (현물) 표
+    spot_html_parts = []
+    spot_header = """
+    <div style='font-size: 15px; color: #848e9c; margin-top: 40px; margin-bottom: 10px; font-weight: 600;'>Spot</div>
+    <table style='width:100%; border-collapse: collapse; text-align: left; color: #eaeaec; font-size: 14px;'>
+    <thead><tr style='border-bottom: 1px solid #2b3139; color: #848e9c; font-size: 13px;'>
+    <th style='padding: 10px 5px;'>종목</th><th style='padding: 10px 5px;'>평가 금액 (Value)</th><th style='padding: 10px 5px;'>미실현 손익</th><th style='padding: 10px 5px;'>수익률(%)</th>
+    </tr></thead><tbody>
+    """.replace('\n', '')
+    spot_html_parts.append(spot_header)
+
+    has_spot = False
     for coin, amount in spot_balance['total'].items():
         if amount > 0:
             current_price = 1.0 if coin == 'USDT' else tickers.get(f"{coin}/USDT", {}).get('last', 0)
             value = amount * current_price
             
             if value >= 1: 
-                weight = (value / current_total_asset * 100) if current_total_asset > 0 else 0
-                
+                has_spot = True
                 if coin == 'USDT':
                     pnl_html = "<td style='padding: 15px 5px; color:#5e6673; font-size: 12px;'>-</td>"
                     perc_html = "<td style='padding: 15px 5px; color:#5e6673; font-size: 12px;'>-</td>"
@@ -250,19 +267,19 @@ try:
 
                 row_html = f"""
                 <tr style='border-bottom: 1px solid #2b3139;'>
-                <td style='padding: 15px 5px;'><span style='background-color:rgba(240, 185, 11, 0.2); color:#f0b90b; padding:3px 8px; border-radius:4px; font-size:12px; font-weight:bold;'>Spot</span></td>
                 <td style='padding: 15px 5px; font-weight:bold;'>{coin}</td>
-                <td style='padding: 15px 5px; color:#eaeaec;'>보유 (Hold)</td>
                 <td style='padding: 15px 5px;'>${value:,.2f}</td>
-                <td style='padding: 15px 5px;'>{weight:,.1f}%</td>
                 {pnl_html}
                 {perc_html}
                 </tr>
                 """.replace('\n', '')
-                html_parts.append(row_html)
+                spot_html_parts.append(row_html)
                 
-    html_parts.append("</tbody></table>")
-    st.markdown("".join(html_parts), unsafe_allow_html=True)
+    if not has_spot:
+        spot_html_parts.append("<tr><td colspan='4' style='padding: 15px 5px; color:#5e6673; text-align:center;'>보유 중인 현물 자산이 없습니다.</td></tr>")
+                
+    spot_html_parts.append("</tbody></table>")
+    st.markdown("".join(spot_html_parts), unsafe_allow_html=True)
 
 except Exception as e:
     st.error(f"오류 발생: {e}")
