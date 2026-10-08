@@ -19,14 +19,12 @@ SPOT_AVG_PRICES = {
 }
 
 # 3. 과거 기간별 누적 수익금(PnL) 직접 입력
-# 해당 기간 동안 '얼마를 벌었는지(또는 잃었는지)' 달러(USD) 기준으로 적어주세요.
-# (Today's PnL은 내일부터 시스템이 매일 자동으로 계산합니다!)
 HISTORICAL_PNL = {
-    7: -8.18,     # 7일간 누적 수익
-    30: 272.17,    # 30일간 누적 수익
-    90: 1165.00,    # 90일간 누적 수익 (본인 수치로 변경)
-    180: 1245.43,  # 180일간 누적 수익 (본인 수치로 변경)
-    365: 1837.29.   # 1년(365일) 누적 수익 (본인 수치로 변경)
+    7: -10.73,     # 7일간 누적 수익
+    30: 269.66,    # 30일간 누적 수익
+    90: 1162.78,    # 90일간 누적 수익 
+    180: 1242.52,  # 180일간 누적 수익
+    365: 1834.38   # 1년(365일) 누적 수익
 }
 # =====================================================================
 
@@ -113,7 +111,6 @@ try:
     current_total_asset = total_usdt_value
     conn = init_db()
     
-    # 💡 오늘 자산 자동 저장 (내일부터 Today's PnL 계산의 기준이 됩니다)
     save_today_asset(conn, current_total_asset)
 
     df_db = pd.read_sql_query("SELECT date, total_asset FROM daily_assets ORDER BY date ASC", conn)
@@ -134,10 +131,15 @@ try:
     df['date_obj'] = pd.to_datetime(df['date']).dt.date
     today_date = today_dt.date()
 
+    # 💡 1일 전 데이터가 없을 때 7일 전 데이터를 끌어오는 버그 수정 완료
     def get_past_asset_from_df(days_ago):
         target_date = today_date - timedelta(days=days_ago)
         past_df = df[df['date_obj'] <= target_date]
         if not past_df.empty:
+            closest_date = past_df.iloc[-1]['date_obj']
+            # 어제 기록을 찾는데 어제 기록이 없고 7일 전 기록만 있다면, Today's PnL이 0으로 시작되게 처리
+            if days_ago == 1 and closest_date < target_date:
+                return current_total_asset
             return past_df.iloc[-1]['total_asset']
         return current_total_asset
 
