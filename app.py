@@ -8,7 +8,7 @@ import plotly.graph_objects as go
 # --- 1. 페이지 설정 ---
 st.set_page_config(page_title="Dashboard", layout="wide")
 
-# --- 2. 커스텀 CSS (다크 테마) ---
+# --- 2. 커스텀 CSS ---
 st.markdown("""
     <style>
     .stApp { background-color: #0b0e11; color: #eaeaec; }
@@ -19,12 +19,10 @@ st.markdown("""
     .pnl-val-red { font-size: 20px; font-weight: bold; color: #f6465d; }
     .pnl-val-green { font-size: 20px; font-weight: bold; color: #0ecb81; }
     .pnl-val-neutral { font-size: 20px; font-weight: bold; color: #eaeaec; }
-    /* 라디오 버튼(기간 선택) 스타일 조정 */
     div.row-widget.stRadio > div { flex-direction: row; align-items: center; }
     </style>
 """, unsafe_allow_html=True)
 
-# --- 3. 데이터베이스 함수 ---
 def init_db():
     conn = sqlite3.connect('my_pnl_ledger.db')
     c = conn.cursor()
@@ -62,17 +60,13 @@ try:
     spot_balance = exchange_spot.fetch_balance()
     swap_balance = exchange_swap.fetch_balance()
     
-    try:
-        tickers = exchange_spot.fetch_tickers()
-    except:
-        tickers = {}
+    try: tickers = exchange_spot.fetch_tickers()
+    except: tickers = {}
 
     total_usdt_value = 0
-    
     for coin, amount in spot_balance['total'].items():
         if amount > 0:
-            if coin == 'USDT':
-                total_usdt_value += amount
+            if coin == 'USDT': total_usdt_value += amount
             else:
                 ticker_key = f"{coin}/USDT"
                 if ticker_key in tickers and 'last' in tickers[ticker_key]:
@@ -80,8 +74,7 @@ try:
 
     for coin, amount in swap_balance['total'].items():
         if amount > 0:
-            if coin == 'USDT':
-                total_usdt_value += amount
+            if coin == 'USDT': total_usdt_value += amount
             else:
                 ticker_key = f"{coin}/USDT"
                 if ticker_key in tickers and 'last' in tickers[ticker_key]:
@@ -117,34 +110,27 @@ try:
     col_period, col_date, col_dummy = st.columns([4, 3, 3])
     with col_period:
         period = st.radio("기간 선택", ["7D", "30D", "90D", "180D", "Custom"], horizontal=True, label_visibility="collapsed")
-    
     with col_date:
-        if period == "Custom":
-            date_range = st.date_input("날짜 지정", [datetime.now().date() - timedelta(days=7), datetime.now().date()], label_visibility="collapsed")
-        else:
-            date_range = None
+        if period == "Custom": date_range = st.date_input("날짜 지정", [datetime.now().date() - timedelta(days=7), datetime.now().date()], label_visibility="collapsed")
+        else: date_range = None
 
     df = pd.read_sql_query("SELECT date, total_asset FROM daily_assets ORDER BY date ASC", conn)
     df['date_obj'] = pd.to_datetime(df['date']).dt.date
     today = datetime.now().date()
 
-    if period == "7D":
-        start_date = today - timedelta(days=7)
-    elif period == "30D":
-        start_date = today - timedelta(days=30)
-    elif period == "90D":
-        start_date = today - timedelta(days=90)
-    elif period == "180D":
-        start_date = today - timedelta(days=180)
+    if period == "7D": start_date = today - timedelta(days=7)
+    elif period == "30D": start_date = today - timedelta(days=30)
+    elif period == "90D": start_date = today - timedelta(days=90)
+    elif period == "180D": start_date = today - timedelta(days=180)
     elif period == "Custom" and date_range and len(date_range) == 2:
         start_date = date_range[0]
         today = date_range[1]
-    else:
-        start_date = today - timedelta(days=7)
+    else: start_date = today - timedelta(days=7)
         
     mask = (df['date_obj'] >= start_date) & (df['date_obj'] <= today)
     filtered_df = df.loc[mask].copy()
 
+    # 차트 상단 PNL 표시
     if not filtered_df.empty:
         period_pnl = filtered_df['total_asset'].iloc[-1] - filtered_df['total_asset'].iloc[0]
         pnl_color = "#0ecb81" if period_pnl >= 0 else "#f6465d"
@@ -152,12 +138,46 @@ try:
         st.markdown(f"<div style='font-size:14px; color:#848e9c; margin-top:20px;'>Total PnL ({period})</div><div style='font-size:20px; font-weight:bold; margin-bottom:10px; color:{pnl_color};'>{pnl_sign}{period_pnl:,.2f} USD</div>", unsafe_allow_html=True)
 
     tab1, tab2 = st.tabs(["Total PnL", "Daily PnL"])
-    chart_layout = dict(plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)', font=dict(color='#848e9c'), margin=dict(l=0, r=0, t=10, b=0), xaxis=dict(showgrid=False, zeroline=False), yaxis=dict(showgrid=True, gridcolor='#2b3139', zeroline=False, tickprefix="$"))
+    
+    # 💡 [핵심 변경] 차트 레이아웃(X축 날짜 포맷 및 범례)을 사진과 동일하게 수정
+    chart_layout = dict(
+        plot_bgcolor='rgba(0,0,0,0)', 
+        paper_bgcolor='rgba(0,0,0,0)', 
+        font=dict(color='#848e9c'), 
+        margin=dict(l=0, r=0, t=10, b=10), 
+        xaxis=dict(
+            showgrid=False, 
+            zeroline=False, 
+            tickformat="%Y-%m-%d", # X축 텍스트에서 시/분/초 제거[cite: 11]
+            hoverformat="%Y-%m-%d" # 마우스 오버 시에도 시/분/초 제거
+        ), 
+        yaxis=dict(
+            showgrid=True, 
+            gridcolor='#2b3139', 
+            zeroline=False, 
+            tickprefix="$"
+        ),
+        legend=dict(
+            orientation="h", 
+            yanchor="top", 
+            y=-0.1, 
+            xanchor="center", 
+            x=0.5
+        ) # 하단 중앙 범례 추가[cite: 11]
+    )
 
     with tab1:
         fig_total = go.Figure()
-        if not filtered_df.empty:
-            fig_total.add_trace(go.Scatter(x=filtered_df['date'], y=filtered_df['total_asset'], mode='lines', line=dict(color='#00d1c1', width=3), fill='tozeroy', fillcolor='rgba(0, 209, 193, 0.1)'))
+        if not filtered_df.empty: 
+            fig_total.add_trace(go.Scatter(
+                x=filtered_df['date'], 
+                y=filtered_df['total_asset'], 
+                mode='lines', 
+                line=dict(color='#00d1c1', width=3), 
+                fill='tozeroy', 
+                fillcolor='rgba(0, 209, 193, 0.1)',
+                name='Total PnL' # 범례 이름 설정[cite: 11]
+            ))
         fig_total.update_layout(**chart_layout)
         st.plotly_chart(fig_total, use_container_width=True)
 
@@ -166,27 +186,30 @@ try:
             filtered_df['Daily_PnL'] = filtered_df['total_asset'].diff().fillna(0)
             colors = ['#0ecb81' if val >= 0 else '#f6465d' for val in filtered_df['Daily_PnL']]
             fig_daily = go.Figure()
-            fig_daily.add_trace(go.Bar(x=filtered_df['date'], y=filtered_df['Daily_PnL'], marker_color=colors))
+            fig_daily.add_trace(go.Bar(
+                x=filtered_df['date'], 
+                y=filtered_df['Daily_PnL'], 
+                marker_color=colors,
+                name='Daily PnL'
+            ))
             fig_daily.update_layout(**chart_layout)
             fig_daily.add_hline(y=0, line_color="#5e6673", line_width=1)
             st.plotly_chart(fig_daily, use_container_width=True)
 
-    # --- 7. 세부 포지션 현황 표 (에러 방지용 삼중 따옴표 적용) ---
+    # --- 7. 세부 포지션 현황 표 ---
     st.markdown("<h3 style='color: #eaeaec; margin-top: 50px; margin-bottom: 15px; font-size: 20px;'>📋 현재 포지션 및 자산 현황</h3>", unsafe_allow_html=True)
     
+    # 🌟 [매우 중요] 여기에 본인이 매수한 현물 코인의 평단가를 적어주세요! 🌟
+    spot_avg_prices = {
+        "RSNDK": 1634.89,  # <-- 예시입니다. 본인의 RSNDK 평단가로 숫자를 바꿔주세요!
+        "BTC": 65000.0,
+    }
+
     html_parts = []
-    
-    # 삼중 따옴표(""")를 사용해 안전하게 줄바꿈하여 코드를 작성한 뒤, 화면에 띄울 때만 공백을 지웁니다.
     header_html = """
     <table style='width:100%; border-collapse: collapse; text-align: left; color: #eaeaec; font-size: 14px;'>
     <thead><tr style='border-bottom: 1px solid #2b3139; color: #848e9c; font-size: 13px;'>
-    <th style='padding: 10px 5px;'>마켓</th>
-    <th style='padding: 10px 5px;'>종목</th>
-    <th style='padding: 10px 5px;'>포지션 (레버리지)</th>
-    <th style='padding: 10px 5px;'>투입 금액 (Margin)</th>
-    <th style='padding: 10px 5px;'>자산 비중</th>
-    <th style='padding: 10px 5px;'>미실현 손익</th>
-    <th style='padding: 10px 5px;'>수익률(%)</th>
+    <th style='padding: 10px 5px;'>마켓</th><th style='padding: 10px 5px;'>종목</th><th style='padding: 10px 5px;'>포지션 (레버리지)</th><th style='padding: 10px 5px;'>투입 금액 (Margin)</th><th style='padding: 10px 5px;'>자산 비중</th><th style='padding: 10px 5px;'>미실현 손익</th><th style='padding: 10px 5px;'>수익률(%)</th>
     </tr></thead><tbody>
     """.replace('\n', '')
     html_parts.append(header_html)
@@ -198,10 +221,8 @@ try:
             side_str = "LONG" if p.get('side') == 'long' else "SHORT"
             side_color = "#0ecb81" if side_str == "LONG" else "#f6465d"
             lev = int(p.get('leverage', 1))
-            
             margin = float(p.get('initialMargin') or (float(p.get('notional', 0)) / lev))
             weight = (margin / current_total_asset * 100) if current_total_asset > 0 else 0
-            
             pnl = float(p.get('unrealizedPnl', 0))
             pnl_perc = float(p.get('percentage', 0))
             pnl_color = "#0ecb81" if pnl >= 0 else "#f6465d"
@@ -212,8 +233,7 @@ try:
             <td style='padding: 15px 5px;'><span style='background-color:rgba(0, 209, 193, 0.2); color:#00d1c1; padding:3px 8px; border-radius:4px; font-size:12px; font-weight:bold;'>Futures</span></td>
             <td style='padding: 15px 5px; font-weight:bold;'>{symbol}</td>
             <td style='padding: 15px 5px; color:{side_color}; font-weight:bold;'>{side_str} <span style='background-color:#2b3139; color:#848e9c; padding:2px 6px; border-radius:4px; font-size:12px; margin-left:6px;'>x{lev}</span></td>
-            <td style='padding: 15px 5px;'>${margin:,.2f}</td>
-            <td style='padding: 15px 5px;'>{weight:,.1f}%</td>
+            <td style='padding: 15px 5px;'>${margin:,.2f}</td><td style='padding: 15px 5px;'>{weight:,.1f}%</td>
             <td style='padding: 15px 5px; color:{pnl_color}; font-weight:bold;'>{pnl_sign}${pnl:,.2f}</td>
             <td style='padding: 15px 5px; color:{pnl_color}; font-weight:bold;'>{pnl_sign}{pnl_perc:,.2f}%</td>
             </tr>
@@ -222,9 +242,28 @@ try:
 
     for coin, amount in spot_balance['total'].items():
         if amount > 0:
-            value = amount if coin == 'USDT' else (amount * tickers.get(f"{coin}/USDT", {}).get('last', 0))
-            if value >= 1:
+            current_price = 1.0 if coin == 'USDT' else tickers.get(f"{coin}/USDT", {}).get('last', 0)
+            value = amount * current_price
+            
+            if value >= 1: 
                 weight = (value / current_total_asset * 100) if current_total_asset > 0 else 0
+                
+                if coin == 'USDT':
+                    pnl_html = "<td style='padding: 15px 5px; color:#5e6673; font-size: 12px;'>-</td>"
+                    perc_html = "<td style='padding: 15px 5px; color:#5e6673; font-size: 12px;'>-</td>"
+                elif coin in spot_avg_prices:
+                    avg_price = spot_avg_prices[coin]
+                    unrealized_pnl = (current_price - avg_price) * amount
+                    pnl_perc = ((current_price - avg_price) / avg_price) * 100
+                    pnl_color = "#0ecb81" if unrealized_pnl >= 0 else "#f6465d"
+                    pnl_sign = "+" if unrealized_pnl > 0 else ""
+                    
+                    pnl_html = f"<td style='padding: 15px 5px; color:{pnl_color}; font-weight:bold;'>{pnl_sign}${unrealized_pnl:,.2f}</td>"
+                    perc_html = f"<td style='padding: 15px 5px; color:{pnl_color}; font-weight:bold;'>{pnl_sign}{pnl_perc:,.2f}%</td>"
+                else:
+                    pnl_html = "<td style='padding: 15px 5px; color:#5e6673; font-size: 12px;'>(평단가 미입력)</td>"
+                    perc_html = "<td style='padding: 15px 5px; color:#5e6673; font-size: 12px;'>-</td>"
+
                 row_html = f"""
                 <tr style='border-bottom: 1px solid #2b3139;'>
                 <td style='padding: 15px 5px;'><span style='background-color:rgba(240, 185, 11, 0.2); color:#f0b90b; padding:3px 8px; border-radius:4px; font-size:12px; font-weight:bold;'>Spot</span></td>
@@ -232,15 +271,14 @@ try:
                 <td style='padding: 15px 5px; color:#eaeaec;'>보유 (Hold)</td>
                 <td style='padding: 15px 5px;'>${value:,.2f}</td>
                 <td style='padding: 15px 5px;'>{weight:,.1f}%</td>
-                <td style='padding: 15px 5px; color:#5e6673; font-size: 12px;'>(API 미지원)</td>
-                <td style='padding: 15px 5px; color:#5e6673; font-size: 12px;'>-</td>
+                {pnl_html}
+                {perc_html}
                 </tr>
                 """.replace('\n', '')
                 html_parts.append(row_html)
                 
     html_parts.append("</tbody></table>")
-    final_html = "".join(html_parts)
-    st.markdown(final_html, unsafe_allow_html=True)
+    st.markdown("".join(html_parts), unsafe_allow_html=True)
 
 except Exception as e:
-    st.error(f"오류 발생. 관리자(본인)만 볼 수 있는 에러 메시지입니다: {e}")
+    st.error(f"오류 발생: {e}")
