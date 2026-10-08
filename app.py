@@ -6,19 +6,24 @@ from datetime import datetime, timedelta
 import plotly.graph_objects as go
 
 # =====================================================================
-# 🌟 [사용자 설정] 나의 투자 원금, 현물 평단가, 과거 수익금 입력 🌟
+# 🌟 [사용자 설정] 나의 투자 원금, 입출금액, 과거 수익금 입력 🌟
 # =====================================================================
 
-# 1. 올해 처음 투입한 총 원금 (USDT 기준)
-INITIAL_INVESTMENT = 1088.2 
+# 1. 올해 처음 투입한 초기 원금 (USDT 기준)
+INITIAL_INVESTMENT = 2100.0 
 
-# 2. 보유 중인 현물(Spot) 코인 평단가
+# 2. 중간 추가 입금액 및 출금액 (수익률 보정용)
+# 중간에 돈을 더 넣으셨다면 DEPOSITS에, 빼셨다면 WITHDRAWALS에 총액을 적어주세요.
+TOTAL_DEPOSITS = 0.0
+TOTAL_WITHDRAWALS = 1011.78  # 💡 예시: 대략 1011.78달러를 출금하셔야 1850달러 수익이 맞게 나옵니다. 본인의 실제 총 출금액으로 수정하세요!
+
+# 3. 보유 중인 현물(Spot) 코인 평단가
 SPOT_AVG_PRICES = {
     "RSNDK": 1656.68, 
     "BTC": 65000.0,
 }
 
-# 3. 과거 기간별 누적 수익금(PnL) 직접 입력
+# 4. 과거 기간별 누적 수익금(PnL) 직접 입력
 HISTORICAL_PNL = {
     7: -27.4,     # 7일간 누적 수익
     30: 252.97,    # 30일간 누적 수익
@@ -111,6 +116,9 @@ try:
     conn = init_db()
     save_today_asset(conn, current_total_asset)
 
+    # 💡 입출금 보정 적용 원금 계산
+    adjusted_investment = INITIAL_INVESTMENT + TOTAL_DEPOSITS - TOTAL_WITHDRAWALS
+
     df_db = pd.read_sql_query("SELECT date, total_asset FROM daily_assets ORDER BY date ASC", conn)
     virtual_records = []
     today_dt = datetime.now()
@@ -123,7 +131,7 @@ try:
             
     ytd_date_str = f"{today_date.year}-01-01"
     if ytd_date_str not in df_db['date'].values and INITIAL_INVESTMENT > 0:
-        virtual_records.append({'date': ytd_date_str, 'total_asset': INITIAL_INVESTMENT})
+        virtual_records.append({'date': ytd_date_str, 'total_asset': INITIAL_INVESTMENT}) # 차트 시작점은 1월 1일 당시의 원금으로 표시
             
     if virtual_records:
         df_virtual = pd.DataFrame(virtual_records)
@@ -154,8 +162,9 @@ try:
     st.markdown(f"<div class='big-asset'>{current_total_asset:,.2f} USDT</div>", unsafe_allow_html=True)
     st.markdown(f"<div class='sub-asset'>≈ {current_total_asset:,.2f} USD</div>", unsafe_allow_html=True)
     
-    ytd_pnl = current_total_asset - INITIAL_INVESTMENT
-    ytd_perc = (ytd_pnl / INITIAL_INVESTMENT) * 100 if INITIAL_INVESTMENT > 0 else 0
+    # 💡 출금액이 반영된 정확한 YTD PnL 계산
+    ytd_pnl = current_total_asset - adjusted_investment
+    ytd_perc = (ytd_pnl / (INITIAL_INVESTMENT + TOTAL_DEPOSITS)) * 100 if (INITIAL_INVESTMENT + TOTAL_DEPOSITS) > 0 else 0
     ytd_color = "#0ecb81" if ytd_pnl >= 0 else "#f6465d"
     ytd_sign = "+" if ytd_pnl > 0 else ""
     
@@ -207,7 +216,12 @@ try:
     filtered_df = df.loc[mask].copy()
 
     if not filtered_df.empty:
-        period_pnl = filtered_df['total_asset'].iloc[-1] - filtered_df['total_asset'].iloc[0]
+        # 차트 상단의 PnL 텍스트 역시 YTD의 경우 출금이 반영된 정확한 값을 표시합니다.
+        if period == "YTD":
+            period_pnl = ytd_pnl
+        else:
+            period_pnl = filtered_df['total_asset'].iloc[-1] - filtered_df['total_asset'].iloc[0]
+            
         pnl_color = "#0ecb81" if period_pnl >= 0 else "#f6465d"
         pnl_sign = "+" if period_pnl > 0 else ""
         st.markdown(f"<div style='font-size:14px; color:#848e9c; margin-top:20px;'>Total PnL ({period})</div><div style='font-size:20px; font-weight:bold; margin-bottom:10px; color:{pnl_color};'>{pnl_sign}{period_pnl:,.2f} USD</div>", unsafe_allow_html=True)
@@ -238,7 +252,7 @@ try:
             fig_daily.add_hline(y=0, line_color="#5e6673", line_width=1)
             st.plotly_chart(fig_daily, use_container_width=True)
 
-    # --- 8. 세부 포지션 현황 표 (에러 방지 구조로 전면 수정) ---
+    # --- 8. 세부 포지션 현황 표 ---
     
     futures_html_parts = []
     futures_header = (
