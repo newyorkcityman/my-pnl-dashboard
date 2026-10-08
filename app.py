@@ -10,7 +10,7 @@ import plotly.graph_objects as go
 # =====================================================================
 
 # 1. 올해 처음 투입한 총 원금 (USDT 기준)
-INITIAL_INVESTMENT = 2100.0 
+INITIAL_INVESTMENT = 1088.2 
 
 # 2. 보유 중인 현물(Spot) 코인 평단가
 SPOT_AVG_PRICES = {
