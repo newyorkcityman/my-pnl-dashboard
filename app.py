@@ -10,6 +10,7 @@ import plotly.graph_objects as go
 # =====================================================================
 
 # 1. 올해 처음 투입한 총 원금 (USDT 기준)
+# (이 금액이 자동으로 올해 1월 1일의 시작 자산으로 차트에 기록됩니다)
 INITIAL_INVESTMENT = 2100.0 
 
 # 2. 보유 중인 현물(Spot) 코인 평단가
@@ -19,12 +20,12 @@ SPOT_AVG_PRICES = {
 }
 
 # 3. 과거 기간별 누적 수익금(PnL) 직접 입력
+# (YTD(올해 누적)는 INITIAL_INVESTMENT를 기준으로 시스템이 '자동' 계산하므로 뺐습니다!)
 HISTORICAL_PNL = {
-    7: -10.73,     # 7일간 누적 수익
-    30: 269.66,    # 30일간 누적 수익
-    90: 1162.78,    # 90일간 누적 수익 
-    180: 1242.52,  # 180일간 누적 수익
-    365: 1834.38   # 1년(365일) 누적 수익
+    7: -26.12,     # 7일간 누적 수익
+    30: 254.26,    # 30일간 누적 수익
+    90: 1152.1,    # 90일간 누적 수익 
+    180: 1824.32,  # 180일간 누적 수익
 }
 # =====================================================================
 
@@ -110,17 +111,23 @@ try:
 
     current_total_asset = total_usdt_value
     conn = init_db()
-    
     save_today_asset(conn, current_total_asset)
 
     df_db = pd.read_sql_query("SELECT date, total_asset FROM daily_assets ORDER BY date ASC", conn)
     virtual_records = []
     today_dt = datetime.now()
+    today_date = today_dt.date()
     
+    # 💡 1. 7일, 30일, 90일, 180일 과거 데이터 생성
     for days_ago, pnl in HISTORICAL_PNL.items():
         past_date = (today_dt - timedelta(days=days_ago)).strftime('%Y-%m-%d')
         if past_date not in df_db['date'].values:
             virtual_records.append({'date': past_date, 'total_asset': current_total_asset - pnl})
+            
+    # 💡 2. YTD(올해 1월 1일) 자산을 INITIAL_INVESTMENT를 이용해 자동 기록!
+    ytd_date_str = f"{today_date.year}-01-01"
+    if ytd_date_str not in df_db['date'].values and INITIAL_INVESTMENT > 0:
+        virtual_records.append({'date': ytd_date_str, 'total_asset': INITIAL_INVESTMENT})
             
     if virtual_records:
         df_virtual = pd.DataFrame(virtual_records)
@@ -129,15 +136,12 @@ try:
         df = df_db.copy()
         
     df['date_obj'] = pd.to_datetime(df['date']).dt.date
-    today_date = today_dt.date()
 
-    # 💡 1일 전 데이터가 없을 때 7일 전 데이터를 끌어오는 버그 수정 완료
     def get_past_asset_from_df(days_ago):
         target_date = today_date - timedelta(days=days_ago)
         past_df = df[df['date_obj'] <= target_date]
         if not past_df.empty:
             closest_date = past_df.iloc[-1]['date_obj']
-            # 어제 기록을 찾는데 어제 기록이 없고 7일 전 기록만 있다면, Today's PnL이 0으로 시작되게 처리
             if days_ago == 1 and closest_date < target_date:
                 return current_total_asset
             return past_df.iloc[-1]['total_asset']
@@ -148,7 +152,6 @@ try:
     asset_30d = get_past_asset_from_df(30)
     asset_90d = get_past_asset_from_df(90)
     asset_180d = get_past_asset_from_df(180)
-    asset_1y = get_past_asset_from_df(365)
 
     # --- 6. 상단 화면 ---
     st.markdown("<div class='est-title'>Est. Total Value</div>", unsafe_allow_html=True)
@@ -163,6 +166,7 @@ try:
     st.markdown("<div class='ytd-title'>YTD PnL (올해 누적 수익)</div>", unsafe_allow_html=True)
     st.markdown(f"<div style='font-size:24px; font-weight:bold; color:{ytd_color}; margin-bottom: 30px;'>{ytd_sign}{ytd_pnl:,.2f} USD ({ytd_sign}{ytd_perc:,.2f}%)</div>", unsafe_allow_html=True)
     
+    # 요약 패널 이름도 1Y에서 YTD로 수정
     col1, col2, col3, col4, col5, col6 = st.columns(6)
     with col1:
         st.markdown("<div class='pnl-title'>Today's PnL</div>", unsafe_allow_html=True)
@@ -180,8 +184,8 @@ try:
         st.markdown("<div class='pnl-title'>180D PnL</div>", unsafe_allow_html=True)
         st.markdown(format_pnl(current_total_asset - asset_180d), unsafe_allow_html=True)
     with col6:
-        st.markdown("<div class='pnl-title'>1Y PnL</div>", unsafe_allow_html=True)
-        st.markdown(format_pnl(current_total_asset - asset_1y), unsafe_allow_html=True)
+        st.markdown("<div class='pnl-title'>YTD PnL</div>", unsafe_allow_html=True)
+        st.markdown(format_pnl(ytd_pnl), unsafe_allow_html=True)
         
     st.write("")
     st.divider()
@@ -189,7 +193,8 @@ try:
     # --- 7. 기간 설정 버튼 및 차트 ---
     col_period, col_date, col_dummy = st.columns([4, 3, 3])
     with col_period:
-        period = st.radio("기간 선택", ["7D", "30D", "90D", "180D", "1Y", "Custom"], horizontal=True, label_visibility="collapsed")
+        # 버튼 이름도 1Y -> YTD 로 변경
+        period = st.radio("기간 선택", ["7D", "30D", "90D", "180D", "YTD", "Custom"], horizontal=True, label_visibility="collapsed")
     with col_date:
         if period == "Custom": date_range = st.date_input("날짜 지정", [datetime.now().date() - timedelta(days=7), datetime.now().date()], label_visibility="collapsed")
         else: date_range = None
@@ -198,7 +203,7 @@ try:
     elif period == "30D": start_date = today_date - timedelta(days=30)
     elif period == "90D": start_date = today_date - timedelta(days=90)
     elif period == "180D": start_date = today_date - timedelta(days=180)
-    elif period == "1Y": start_date = today_date - timedelta(days=365)
+    elif period == "YTD": start_date = datetime(today_date.year, 1, 1).date() # 올해 1월 1일로 시작점 세팅
     elif period == "Custom" and date_range and len(date_range) == 2:
         start_date = date_range[0]
         today_date = date_range[1]
@@ -268,73 +273,4 @@ try:
             row_html = f"""
             <tr style='border-bottom: 1px solid #2b3139;'>
             <td style='padding: 15px 5px; font-weight:bold;'>{symbol}</td>
-            <td style='padding: 15px 5px; color:{side_color}; font-weight:bold;'>{side_str} <span style='background-color:#2b3139; color:#848e9c; padding:2px 6px; border-radius:4px; font-size:12px; margin-left:6px;'>x{lev}</span></td>
-            <td style='padding: 15px 5px;'>${margin:,.2f}</td>
-            <td style='padding: 15px 5px; color:{pnl_color}; font-weight:bold;'>{pnl_sign}${pnl:,.2f}</td>
-            <td style='padding: 15px 5px; color:{pnl_color}; font-weight:bold;'>{pnl_sign}{pnl_perc:,.2f}%</td>
-            </tr>
-            """.replace('\n', '')
-            futures_html_parts.append(row_html)
-
-    if not has_futures:
-        futures_html_parts.append("<tr><td colspan='5' style='padding: 15px 5px; color:#5e6673; text-align:center;'>현재 진입한 선물 포지션이 없습니다.</td></tr>")
-        
-    futures_html_parts.append("</tbody></table>")
-    st.markdown("".join(futures_html_parts), unsafe_allow_html=True)
-
-    spot_html_parts = []
-    spot_header = """
-    <div style='font-size: 15px; color: #848e9c; margin-top: 40px; margin-bottom: 10px; font-weight: 600;'>Spot</div>
-    <table style='width:100%; border-collapse: collapse; text-align: left; color: #eaeaec; font-size: 14px;'>
-    <thead><tr style='border-bottom: 1px solid #2b3139; color: #848e9c; font-size: 13px;'>
-    <th style='padding: 10px 5px;'>종목</th><th style='padding: 10px 5px;'>평단가 (Avg Price)</th><th style='padding: 10px 5px;'>평가 금액 (Value)</th><th style='padding: 10px 5px;'>미실현 손익</th><th style='padding: 10px 5px;'>수익률(%)</th>
-    </tr></thead><tbody>
-    """.replace('\n', '')
-    spot_html_parts.append(spot_header)
-
-    has_spot = False
-    for coin, amount in spot_balance['total'].items():
-        if amount > 0:
-            current_price = 1.0 if coin == 'USDT' else tickers.get(f"{coin}/USDT", {}).get('last', 0)
-            value = amount * current_price
-            
-            if value >= 1: 
-                has_spot = True
-                if coin == 'USDT':
-                    avg_price_html = "<td style='padding: 15px 5px; color:#5e6673;'>$1.00</td>"
-                    pnl_html = "<td style='padding: 15px 5px; color:#5e6673; font-size: 12px;'>-</td>"
-                    perc_html = "<td style='padding: 15px 5px; color:#5e6673; font-size: 12px;'>-</td>"
-                elif coin in SPOT_AVG_PRICES:
-                    avg_price = SPOT_AVG_PRICES[coin]
-                    unrealized_pnl = (current_price - avg_price) * amount
-                    pnl_perc = ((current_price - avg_price) / avg_price) * 100
-                    pnl_color = "#0ecb81" if unrealized_pnl >= 0 else "#f6465d"
-                    pnl_sign = "+" if unrealized_pnl > 0 else ""
-                    
-                    avg_price_html = f"<td style='padding: 15px 5px;'>${avg_price:,.4f}</td>"
-                    pnl_html = f"<td style='padding: 15px 5px; color:{pnl_color}; font-weight:bold;'>{pnl_sign}${unrealized_pnl:,.2f}</td>"
-                    perc_html = f"<td style='padding: 15px 5px; color:{pnl_color}; font-weight:bold;'>{pnl_sign}{pnl_perc:,.2f}%</td>"
-                else:
-                    avg_price_html = "<td style='padding: 15px 5px; color:#5e6673;'>(미입력)</td>"
-                    pnl_html = "<td style='padding: 15px 5px; color:#5e6673; font-size: 12px;'>(평단가 미입력)</td>"
-                    perc_html = "<td style='padding: 15px 5px; color:#5e6673; font-size: 12px;'>-</td>"
-
-                row_html = f"""
-                <tr style='border-bottom: 1px solid #2b3139;'>
-                <td style='padding: 15px 5px; font-weight:bold;'>{coin}</td>
-                {avg_price_html}
-                <td style='padding: 15px 5px;'>${value:,.2f}</td>
-                {pnl_html}
-                {perc_html}
-                </tr>
-                """.replace('\n', '')
-                spot_html_parts.append(row_html)
-                
-    if not has_spot:
-        spot_html_parts.append("<tr><td colspan='5' style='padding: 15px 5px; color:#5e6673; text-align:center;'>보유 중인 현물 자산이 없습니다.</td></tr>")
-                
-    spot_html_parts.append("</tbody></table>")
-    st.markdown("".join(spot_html_parts), unsafe_allow_html=True)
-
-except Exception as e:
-    st.error(f"오류 발생: {e}")
+            <td style='padding: 15px 5px; color:{side_color}; font-weight:bold;'>{side_str} <span style='background-color:#2b3139; color:#848e9c; padding:2px 6
