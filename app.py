@@ -13,6 +13,8 @@ st.markdown("""
     <style>
     .stApp { background-color: #0b0e11; color: #eaeaec; }
     header { visibility: hidden; }
+    /* 새로 추가된 Est. Total Value 스타일 */
+    .est-title { font-size: 24px; font-weight: 600; color: #eaeaec; margin-bottom: 5px; margin-top: 10px; }
     .big-asset { font-size: 42px !important; font-weight: 800; margin-bottom: 0px; line-height: 1.2; }
     .sub-asset { font-size: 16px; color: #848e9c; margin-top: 0px; margin-bottom: 30px; }
     .pnl-title { font-size: 13px; color: #848e9c; border-bottom: 1px dashed #5e6673; display: inline-block; margin-bottom: 5px; }
@@ -21,10 +23,7 @@ st.markdown("""
     .pnl-val-neutral { font-size: 20px; font-weight: bold; color: #eaeaec; }
     div.row-widget.stRadio > div { flex-direction: row; align-items: center; }
     
-    /* 우측 상단 Running(로딩 중) 애니메이션 숨기기 */
     [data-testid="stStatusWidget"] { display: none !important; }
-    
-    /* 로딩 중 화면 흐려짐(어두워짐) 방지 */
     .stApp [data-testid="stAppViewBlockContainer"] {
         opacity: 1 !important;
         filter: none !important;
@@ -107,6 +106,7 @@ try:
     asset_30d = get_past_asset(conn, 30) or current_total_asset
 
     # --- 6. 상단 화면 ---
+    st.markdown("<div class='est-title'>Est. Total Value</div>", unsafe_allow_html=True)
     st.markdown(f"<div class='big-asset'>{current_total_asset:,.2f} USDT</div>", unsafe_allow_html=True)
     st.markdown(f"<div class='sub-asset'>≈ {current_total_asset:,.2f} USD</div>", unsafe_allow_html=True)
     
@@ -180,9 +180,9 @@ try:
             fig_daily.add_hline(y=0, line_color="#5e6673", line_width=1)
             st.plotly_chart(fig_daily, use_container_width=True)
 
-    # --- 8. 세부 포지션 현황 표 (선물/현물 분리 및 불필요한 칸 제거) ---
+    # --- 8. 세부 포지션 현황 표 ---
     
-    # 🌟 [매우 중요] 여기에 본인이 매수한 현물 코인의 평단가를 다시 적어주세요! 🌟
+    # 🌟 [매우 중요] 본인이 매수한 현물 코인의 평단가 입력 🌟
     spot_avg_prices = {
         "RSNDK": 1634.89, 
         "BTC": 65000.0,
@@ -230,13 +230,13 @@ try:
     futures_html_parts.append("</tbody></table>")
     st.markdown("".join(futures_html_parts), unsafe_allow_html=True)
 
-    # 8-2. Spot (현물) 표
+    # 8-2. Spot (현물) 표 - '평단가' 열 추가
     spot_html_parts = []
     spot_header = """
     <div style='font-size: 15px; color: #848e9c; margin-top: 40px; margin-bottom: 10px; font-weight: 600;'>Spot</div>
     <table style='width:100%; border-collapse: collapse; text-align: left; color: #eaeaec; font-size: 14px;'>
     <thead><tr style='border-bottom: 1px solid #2b3139; color: #848e9c; font-size: 13px;'>
-    <th style='padding: 10px 5px;'>종목</th><th style='padding: 10px 5px;'>평가 금액 (Value)</th><th style='padding: 10px 5px;'>미실현 손익</th><th style='padding: 10px 5px;'>수익률(%)</th>
+    <th style='padding: 10px 5px;'>종목</th><th style='padding: 10px 5px;'>평단가 (Avg Price)</th><th style='padding: 10px 5px;'>평가 금액 (Value)</th><th style='padding: 10px 5px;'>미실현 손익</th><th style='padding: 10px 5px;'>수익률(%)</th>
     </tr></thead><tbody>
     """.replace('\n', '')
     spot_html_parts.append(spot_header)
@@ -249,7 +249,10 @@ try:
             
             if value >= 1: 
                 has_spot = True
+                
+                # 평단가 및 PNL 계산
                 if coin == 'USDT':
+                    avg_price_html = "<td style='padding: 15px 5px; color:#5e6673;'>$1.00</td>"
                     pnl_html = "<td style='padding: 15px 5px; color:#5e6673; font-size: 12px;'>-</td>"
                     perc_html = "<td style='padding: 15px 5px; color:#5e6673; font-size: 12px;'>-</td>"
                 elif coin in spot_avg_prices:
@@ -259,15 +262,18 @@ try:
                     pnl_color = "#0ecb81" if unrealized_pnl >= 0 else "#f6465d"
                     pnl_sign = "+" if unrealized_pnl > 0 else ""
                     
+                    avg_price_html = f"<td style='padding: 15px 5px;'>${avg_price:,.4f}</td>"
                     pnl_html = f"<td style='padding: 15px 5px; color:{pnl_color}; font-weight:bold;'>{pnl_sign}${unrealized_pnl:,.2f}</td>"
                     perc_html = f"<td style='padding: 15px 5px; color:{pnl_color}; font-weight:bold;'>{pnl_sign}{pnl_perc:,.2f}%</td>"
                 else:
+                    avg_price_html = "<td style='padding: 15px 5px; color:#5e6673;'>(미입력)</td>"
                     pnl_html = "<td style='padding: 15px 5px; color:#5e6673; font-size: 12px;'>(평단가 미입력)</td>"
                     perc_html = "<td style='padding: 15px 5px; color:#5e6673; font-size: 12px;'>-</td>"
 
                 row_html = f"""
                 <tr style='border-bottom: 1px solid #2b3139;'>
                 <td style='padding: 15px 5px; font-weight:bold;'>{coin}</td>
+                {avg_price_html}
                 <td style='padding: 15px 5px;'>${value:,.2f}</td>
                 {pnl_html}
                 {perc_html}
@@ -276,7 +282,7 @@ try:
                 spot_html_parts.append(row_html)
                 
     if not has_spot:
-        spot_html_parts.append("<tr><td colspan='4' style='padding: 15px 5px; color:#5e6673; text-align:center;'>보유 중인 현물 자산이 없습니다.</td></tr>")
+        spot_html_parts.append("<tr><td colspan='5' style='padding: 15px 5px; color:#5e6673; text-align:center;'>보유 중인 현물 자산이 없습니다.</td></tr>")
                 
     spot_html_parts.append("</tbody></table>")
     st.markdown("".join(spot_html_parts), unsafe_allow_html=True)
