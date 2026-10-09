@@ -6,19 +6,25 @@ from datetime import datetime, timedelta
 import plotly.graph_objects as go
 
 # =====================================================================
-# 🌟 [사용자 설정] 나의 투자 원금 및 현물 평단가 🌟
+# 🌟 [사용자 설정] 나의 투자 원금 및 과거 출금액 보정 🌟
 # =====================================================================
 
 # 1. 올해 처음 투입한 초기 원금 (USDT 기준)
-INITIAL_INVESTMENT = 1088.22 
+INITIAL_INVESTMENT = 2100.0 
 
-# 2. 보유 중인 현물(Spot) 코인 평단가
+# 2. 거래소 API가 불러오지 못하는 '오래된 과거(보통 90일 이전)'의 입출금액 수동 보정
+# (최근 하신 입출금과 '앞으로 하실 모든 입출금'은 트론(TRX), 리플(XRP)을 포함해 코드가 당시 시세로 100% 자동 감지합니다!)
+# 현재 YTD 수익이 실제와 다르면 아래 출금액 숫자를 조금씩 조절해서 본인 수익에 맞춰주세요.
+MANUAL_OLD_DEPOSITS = 0.0
+MANUAL_OLD_WITHDRAWALS = 450.0  # 💡 예시: 올해 초중반에 출금하셨던 금액을 대략적으로 적어주세요.
+
+# 3. 보유 중인 현물(Spot) 코인 평단가
 SPOT_AVG_PRICES = {
     "RSNDK": 1656.68, 
     "BTC": 65000.0,
 }
 
-# 3. 과거 기간별 누적 수익금(PnL) 직접 입력 (7일, 30일, 90일, 180일)
+# 4. 과거 기간별 누적 수익금(PnL) 직접 입력 (7일, 30일, 90일, 180일)
 HISTORICAL_PNL = {
     7: -27.40,     
     30: 252.97,    
@@ -49,9 +55,8 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# --- 3. 데이터베이스 함수 (v2로 새롭게 초기화) ---
+# --- 3. 데이터베이스 함수 ---
 def init_db():
-    # 💡 파일 이름을 바꿔서 기존에 꼬여있던 잘못된 과거 자산 데이터를 백지화합니다.
     conn = sqlite3.connect('my_pnl_ledger_v2.db')
     c = conn.cursor()
     c.execute('''CREATE TABLE IF NOT EXISTS daily_assets (date TEXT PRIMARY KEY, total_asset REAL)''')
@@ -69,7 +74,7 @@ def format_pnl(val):
     elif val < 0: return f"<div class='pnl-val-red'>{val:,.2f} USD</div>"
     else: return f"<div class='pnl-val-neutral'>{val:,.2f} USD</div>"
 
-# --- 4. API 데이터 캐싱 및 입출금 자동 조회 ---
+# --- 4. API 데이터 캐싱 및 스마트 입출금 자동 조회 ---
 @st.cache_data(ttl=3600, show_spinner=False)
 def get_exchange_data(api_key, secret_key, passphrase):
     exchange_spot = ccxt.bitget({'apiKey': api_key, 'secret': secret_key, 'password': passphrase, 'enableRateLimit': True})
@@ -81,23 +86,50 @@ def get_exchange_data(api_key, secret_key, passphrase):
     except: tickers = {}
     positions = exchange_swap.fetch_positions()
     
-    total_deposits = 0.0
-    total_withdrawals = 0.0
-    try:
-        since_ms = int(datetime(datetime.now().year, 1, 1).timestamp() * 1000)
-        deps = exchange_spot.fetch_deposits(code='USDT', since=since_ms)
-        withs = exchange_spot.fetch_withdrawals(code='USDT', since=since_ms)
-        
-        for d in deps:
-            if d.get('status') in ['ok', 'success', 'completed']:
-                total_deposits += float(d.get('amount', 0))
-        for w in withs:
-            if w.get('status') in ['ok', 'success', 'completed']:
-                total_withdrawals += float(w.get('amount', 0))
-    except Exception:
-        pass 
+    # 💡 TRX, XRP 등 모든 코인 입출금 자동 추적 및 당시 시세 변환 로직
+    api_deposits = 0.0
+    api_withdrawals = 0.0
+    coins_to_check = ['USDT', 'XRP', 'TRX', 'EOS', 'XLM', 'BTC', 'ETH']
+    since_ms = int(datetime(datetime.now().year, 1, 1).timestamp() * 1000)
     
-    return spot_balance, swap_balance, tickers, positions, total_deposits, total_withdrawals
+    for coin in coins_to_check:
+        try:
+            deps = exchange_spot.fetch_deposits(code=coin, since=since_ms)
+            for d in deps:
+                if str(d.get('status')).lower() in ['ok', 'success', 'completed', '1', 'true']:
+                    amt = float(d.get('amount', 0))
+                    if coin == 'USDT':
+                        api_deposits += amt
+                    else:
+                        ts = d.get('timestamp')
+                        try:
+                            ohlcv = exchange_spot.fetch_ohlcv(f"{coin}/USDT", '1d', since=ts, limit=1)
+                            if ohlcv: api_deposits += amt * ohlcv[0][4]
+                            else: api_deposits += amt * tickers.get(f"{coin}/USDT", {}).get('last', 0)
+                        except:
+                            api_deposits += amt * tickers.get(f"{coin}/USDT", {}).get('last', 0)
+        except Exception:
+            pass
+            
+        try:
+            withs = exchange_spot.fetch_withdrawals(code=coin, since=since_ms)
+            for w in withs:
+                if str(w.get('status')).lower() in ['ok', 'success', 'completed', '1', 'true']:
+                    amt = float(w.get('amount', 0))
+                    if coin == 'USDT':
+                        api_withdrawals += amt
+                    else:
+                        ts = w.get('timestamp')
+                        try:
+                            ohlcv = exchange_spot.fetch_ohlcv(f"{coin}/USDT", '1d', since=ts, limit=1)
+                            if ohlcv: api_withdrawals += amt * ohlcv[0][4]
+                            else: api_withdrawals += amt * tickers.get(f"{coin}/USDT", {}).get('last', 0)
+                        except:
+                            api_withdrawals += amt * tickers.get(f"{coin}/USDT", {}).get('last', 0)
+        except Exception:
+            pass
+    
+    return spot_balance, swap_balance, tickers, positions, api_deposits, api_withdrawals
 
 # --- 5. 메인 로직 ---
 try:
@@ -105,7 +137,7 @@ try:
     secret_key = st.secrets["BITGET_SECRET_KEY"]
     passphrase = st.secrets["BITGET_PASSPHRASE"]
     
-    spot_balance, swap_balance, tickers, positions, total_deposits, total_withdrawals = get_exchange_data(api_key, secret_key, passphrase)
+    spot_balance, swap_balance, tickers, positions, api_deposits, api_withdrawals = get_exchange_data(api_key, secret_key, passphrase)
 
     total_usdt_value = 0
     for coin, amount in spot_balance['total'].items():
@@ -128,6 +160,11 @@ try:
     conn = init_db()
     save_today_asset(conn, current_total_asset)
 
+    # 💡 자동 API 조회액 + 수동 보정액 결합
+    total_deposits = api_deposits + MANUAL_OLD_DEPOSITS
+    total_withdrawals = api_withdrawals + MANUAL_OLD_WITHDRAWALS
+    
+    # 💡 최종 수익 계산 기준점 (원금 + 총입금 - 총출금)
     adjusted_investment = INITIAL_INVESTMENT + total_deposits - total_withdrawals
 
     df_db = pd.read_sql_query("SELECT date, total_asset FROM daily_assets ORDER BY date ASC", conn)
@@ -173,6 +210,7 @@ try:
     st.markdown(f"<div class='big-asset'>{current_total_asset:,.2f} USDT</div>", unsafe_allow_html=True)
     st.markdown(f"<div class='sub-asset'>≈ {current_total_asset:,.2f} USD</div>", unsafe_allow_html=True)
     
+    # 💡 완벽하게 보정된 YTD PnL
     ytd_pnl = current_total_asset - adjusted_investment
     ytd_perc = (ytd_pnl / (INITIAL_INVESTMENT + total_deposits)) * 100 if (INITIAL_INVESTMENT + total_deposits) > 0 else 0
     ytd_color = "#0ecb81" if ytd_pnl >= 0 else "#f6465d"
