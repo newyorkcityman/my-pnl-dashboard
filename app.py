@@ -16,7 +16,7 @@ INITIAL_INVESTMENT = 2100.0
 # (최근 하신 입출금과 '앞으로 하실 모든 입출금'은 트론(TRX), 리플(XRP)을 포함해 코드가 당시 시세로 100% 자동 감지합니다!)
 # 현재 YTD 수익이 실제와 다르면 아래 출금액 숫자를 조금씩 조절해서 본인 수익에 맞춰주세요.
 MANUAL_OLD_DEPOSITS = 0.0
-MANUAL_OLD_WITHDRAWALS = 450.0  # 💡 예시: 올해 초중반에 출금하셨던 금액을 대략적으로 적어주세요.
+MANUAL_OLD_WITHDRAWALS = 0.0  # 💡 예시: 올해 초중반에 출금하셨던 금액을 대략적으로 적어주세요.
 
 # 3. 보유 중인 현물(Spot) 코인 평단가
 SPOT_AVG_PRICES = {
