@@ -6,11 +6,10 @@ from datetime import datetime, timedelta
 import plotly.graph_objects as go
 
 # =====================================================================
-# 🌟 [사용자 설정] 나의 투자 원금, 현물 평단가, 매매 일지 🌟
+# 🌟 [사용자 설정] 나의 투자 원금 및 현물 평단가 🌟
 # =====================================================================
 
-# 1. 올해 처음 투입한 총 원금 (USDT 기준)
-# (중간에 입출금한 내역은 이제 거래소에서 '자동'으로 끌어와서 계산합니다!)
+# 1. 올해 처음 투입한 초기 원금 (USDT 기준)
 INITIAL_INVESTMENT = 1088.22 
 
 # 2. 보유 중인 현물(Spot) 코인 평단가
@@ -19,16 +18,7 @@ SPOT_AVG_PRICES = {
     "BTC": 65000.0,
 }
 
-# 3. 🏆 나의 매매 일지 (종료된 포지션) 🏆
-# 익절/손절이 완전히 끝난 내역만 아래 양식에 맞춰 적어주시면 멋진 표로 나타납니다.
-# 구분(type): 'Futures' 또는 'Spot' / 포지션(side): 'LONG', 'SHORT', 'BUY'
-CLOSED_TRADES = [
-    {"symbol": "BTC", "type": "Futures", "side": "LONG", "entry_date": "2026-10-03", "exit_date": "2026-10-06", "profit": 250.50},
-    {"symbol": "ETH", "type": "Futures", "side": "SHORT", "entry_date": "2026-09-20", "exit_date": "2026-09-25", "profit": 120.00},
-    {"symbol": "RSNDK", "type": "Spot", "side": "BUY", "entry_date": "2026-08-10", "exit_date": "2026-09-01", "profit": -15.20},
-]
-
-# 4. 과거 기간별 누적 수익금 (7일, 30일, 90일, 180일)
+# 3. 과거 기간별 누적 수익금(PnL) 직접 입력 (7일, 30일, 90일, 180일)
 HISTORICAL_PNL = {
     7: -27.40,     
     30: 252.97,    
@@ -40,7 +30,7 @@ HISTORICAL_PNL = {
 # --- 1. 페이지 설정 ---
 st.set_page_config(page_title="Dashboard", layout="wide")
 
-# --- 2. 커스텀 CSS (화면 어두워짐, 로딩 스피너 완벽 차단) ---
+# --- 2. 커스텀 CSS ---
 st.markdown("""
     <style>
     .stApp { background-color: #0b0e11; color: #eaeaec; }
@@ -54,20 +44,15 @@ st.markdown("""
     .pnl-val-green { font-size: 20px; font-weight: bold; color: #0ecb81; }
     .pnl-val-neutral { font-size: 20px; font-weight: bold; color: #eaeaec; }
     div.row-widget.stRadio > div { flex-direction: row; align-items: center; }
-    
-    /* 💡 버퍼링(화면 어두워짐) 강제 차단 CSS */
     [data-testid="stStatusWidget"], .stSpinner { display: none !important; }
-    .stApp [data-testid="stAppViewBlockContainer"] { 
-        opacity: 1 !important; 
-        filter: none !important; 
-        transition: none !important; 
-    }
+    .stApp [data-testid="stAppViewBlockContainer"] { opacity: 1 !important; filter: none !important; transition: none !important; }
     </style>
 """, unsafe_allow_html=True)
 
-# --- 3. 데이터베이스 함수 ---
+# --- 3. 데이터베이스 함수 (v2로 새롭게 초기화) ---
 def init_db():
-    conn = sqlite3.connect('my_pnl_ledger.db')
+    # 💡 파일 이름을 바꿔서 기존에 꼬여있던 잘못된 과거 자산 데이터를 백지화합니다.
+    conn = sqlite3.connect('my_pnl_ledger_v2.db')
     c = conn.cursor()
     c.execute('''CREATE TABLE IF NOT EXISTS daily_assets (date TEXT PRIMARY KEY, total_asset REAL)''')
     conn.commit()
@@ -84,7 +69,7 @@ def format_pnl(val):
     elif val < 0: return f"<div class='pnl-val-red'>{val:,.2f} USD</div>"
     else: return f"<div class='pnl-val-neutral'>{val:,.2f} USD</div>"
 
-# --- 4. API 데이터 캐싱 (캐시 시간 1시간으로 대폭 늘려서 버퍼링 제로화) ---
+# --- 4. API 데이터 캐싱 및 입출금 자동 조회 ---
 @st.cache_data(ttl=3600, show_spinner=False)
 def get_exchange_data(api_key, secret_key, passphrase):
     exchange_spot = ccxt.bitget({'apiKey': api_key, 'secret': secret_key, 'password': passphrase, 'enableRateLimit': True})
@@ -96,7 +81,6 @@ def get_exchange_data(api_key, secret_key, passphrase):
     except: tickers = {}
     positions = exchange_swap.fetch_positions()
     
-    # 💡 자동 입출금 내역 조회 (올해 1월 1일 기준)
     total_deposits = 0.0
     total_withdrawals = 0.0
     try:
@@ -111,7 +95,7 @@ def get_exchange_data(api_key, secret_key, passphrase):
             if w.get('status') in ['ok', 'success', 'completed']:
                 total_withdrawals += float(w.get('amount', 0))
     except Exception:
-        pass # API 권한 오류 시 사이트 멈춤 방지
+        pass 
     
     return spot_balance, swap_balance, tickers, positions, total_deposits, total_withdrawals
 
@@ -144,7 +128,6 @@ try:
     conn = init_db()
     save_today_asset(conn, current_total_asset)
 
-    # 💡 자동화된 YTD(올해 누적 수익) 계산 로직
     adjusted_investment = INITIAL_INVESTMENT + total_deposits - total_withdrawals
 
     df_db = pd.read_sql_query("SELECT date, total_asset FROM daily_assets ORDER BY date ASC", conn)
@@ -276,7 +259,7 @@ try:
             fig_daily.add_hline(y=0, line_color="#5e6673", line_width=1)
             st.plotly_chart(fig_daily, use_container_width=True)
 
-    # --- 8. 세부 포지션 현황 표 (에러 방지 괄호 문자열 결합) ---
+    # --- 8. 세부 포지션 현황 표 ---
     
     futures_html_parts = []
     futures_header = (
@@ -372,49 +355,6 @@ try:
                 
     spot_html_parts.append("</tbody></table>")
     st.markdown("".join(spot_html_parts), unsafe_allow_html=True)
-
-    # --- 9. 최근 매매 내역 (Closed Trades) ---
-    st.markdown("<div style='font-size: 15px; color: #848e9c; margin-top: 50px; margin-bottom: 10px; font-weight: 600;'>📈 최근 매매 내역 (Closed Trades)</div>", unsafe_allow_html=True)
-    
-    trade_html_parts = []
-    trade_header = (
-        "<table style='width:100%; border-collapse: collapse; text-align: left; color: #eaeaec; font-size: 14px;'>"
-        "<thead><tr style='border-bottom: 1px solid #2b3139; color: #848e9c; font-size: 13px;'>"
-        "<th style='padding: 10px 5px;'>종목 (마켓)</th><th style='padding: 10px 5px;'>포지션</th><th style='padding: 10px 5px;'>진입 날짜</th><th style='padding: 10px 5px;'>종료 날짜</th><th style='padding: 10px 5px;'>확정 수익금</th>"
-        "</tr></thead><tbody>"
-    )
-    trade_html_parts.append(trade_header)
-    
-    if len(CLOSED_TRADES) > 0:
-        for t in CLOSED_TRADES:
-            t_sym = t.get("symbol", "")
-            t_type = t.get("type", "")
-            t_side = t.get("side", "")
-            t_in = t.get("entry_date", "")
-            t_out = t.get("exit_date", "")
-            t_profit = float(t.get("profit", 0.0))
-            
-            pnl_color = "#0ecb81" if t_profit >= 0 else "#f6465d"
-            pnl_sign = "+" if t_profit > 0 else ""
-            
-            # 마켓 뱃지 색상
-            type_badge = f"<span style='background-color:rgba(0, 209, 193, 0.2); color:#00d1c1; padding:2px 6px; border-radius:4px; font-size:11px; margin-left:6px;'>{t_type}</span>" if t_type == "Futures" else f"<span style='background-color:rgba(240, 185, 11, 0.2); color:#f0b90b; padding:2px 6px; border-radius:4px; font-size:11px; margin-left:6px;'>{t_type}</span>"
-            
-            row_html = (
-                "<tr style='border-bottom: 1px solid #2b3139;'>"
-                f"<td style='padding: 15px 5px; font-weight:bold;'>{t_sym} {type_badge}</td>"
-                f"<td style='padding: 15px 5px; color:#eaeaec;'>{t_side}</td>"
-                f"<td style='padding: 15px 5px; color:#848e9c;'>{t_in}</td>"
-                f"<td style='padding: 15px 5px; color:#848e9c;'>{t_out}</td>"
-                f"<td style='padding: 15px 5px; color:{pnl_color}; font-weight:bold;'>{pnl_sign}${t_profit:,.2f}</td>"
-                "</tr>"
-            )
-            trade_html_parts.append(row_html)
-    else:
-        trade_html_parts.append("<tr><td colspan='5' style='padding: 15px 5px; color:#5e6673; text-align:center;'>기록된 과거 매매 내역이 없습니다.</td></tr>")
-
-    trade_html_parts.append("</tbody></table><br><br>")
-    st.markdown("".join(trade_html_parts), unsafe_allow_html=True)
 
 except Exception as e:
     st.error(f"오류 발생: {e}")
